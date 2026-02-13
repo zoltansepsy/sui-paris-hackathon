@@ -1,0 +1,76 @@
+sequenceDiagram
+    autonumber
+
+    participant C as Client
+    participant CP as Client Profile
+    participant J as Job
+    participant JC as JobCap
+    participant M as Milestone
+    participant F as Freelancer
+    participant FP as Freelancer Profile
+    participant E as Escrow
+
+    Note over C,E: Phase 1: Job Creation
+    C->>+J: create_job(title, desc, budget, deadline)
+    J->>E: Lock funds in escrow
+    J->>JC: Create JobCap
+    JC-->>C: Transfer JobCap
+    J->>CP: increment_total_jobs()
+    J->>CP: add_active_job(job_id)
+    J-->>-C: Job created (OPEN)
+
+    Note over C,E: Phase 2: Add milestones
+    C->>+J: add_milestone(description, amount)
+    J->>M: Create Milestone
+    J-->>-C: Milestone added
+
+    Note over C,E: Phase 3: Freelancer Application
+    F->>+J: apply_for_job(freelancer_profile)
+    J->>J: Add to applicants[]
+    J-->>-F: Application recorded
+
+    Note over C,E: Phase 4: Assignment
+    C->>+J: assign_freelancer(freelancer_addr)
+    J->>J: Set freelancer, state=ASSIGNED
+    J-->>-C: Freelancer assigned
+
+    Note over C,E: Phase 5: Start Work
+    F->>+J: start_job(freelancer_profile)
+    J->>J: state=IN_PROGRESS
+    J->>FP: increment_total_jobs()
+    J->>FP: add_active_job(job_id)
+    J-->>-F: Job started
+
+    Note over C,E: Phase 6: Submit Milestone
+    F->>+J: submit_milestone(milestone_id, proof_blob)
+    J->>M: Mark completed, store blob_id
+    J->>J: state=SUBMITTED
+    J-->>-F: Milestone submitted
+
+    Note over C,E: Phase 7: Approve & Pay
+    C->>+J: approve_milestone(milestone_id, client_profile, freelancer_profile)
+    J->>M: Mark approved
+    J->>E: Release payment
+    E-->>F: Transfer SUI
+
+    alt All milestones approved
+        J->>J: state=COMPLETED
+        J->>CP: record_job_completion()
+        J->>FP: record_job_completion()
+    else More milestones remaining
+        J->>J: state=IN_PROGRESS
+    end
+    J-->>-C: Milestone approved
+
+    Note over C,E: Alternative: Cancellation
+    rect rgb(255, 230, 230)
+        C->>+J: cancel_job() or cancel_job_with_freelancer()
+        J->>J: state=CANCELLED
+        J->>E: Refund to client
+        E-->>C: Return SUI
+        J->>CP: remove_active_job()
+        opt If freelancer assigned
+            J->>FP: remove_active_job()
+        end
+        J-->>-C: Job cancelled
+    end

@@ -1,0 +1,54 @@
+stateDiagram-v2
+    [*] --> OPEN: create_job()
+
+    OPEN --> ASSIGNED: assign_freelancer()
+    OPEN --> CANCELLED: cancel_job()
+
+    ASSIGNED --> IN_PROGRESS: start_job()
+    ASSIGNED --> CANCELLED: cancel_job_with_freelancer()
+
+    IN_PROGRESS --> SUBMITTED: submit_milestone()
+
+    SUBMITTED --> AWAITING_REVIEW: auto
+
+    AWAITING_REVIEW --> IN_PROGRESS: request_revision()
+    AWAITING_REVIEW --> COMPLETED: approve_milestone()\n[all milestones done]
+    AWAITING_REVIEW --> IN_PROGRESS: approve_milestone()\n[more milestones]
+
+    COMPLETED --> [*]
+    CANCELLED --> [*]
+
+    note right of OPEN
+        State 0
+        Job posted, accepting applications
+    end note
+
+    note right of ASSIGNED
+        State 1
+        Freelancer selected
+    end note
+
+    note right of IN_PROGRESS
+        State 2
+        Work actively being done
+    end note
+
+    note right of SUBMITTED
+        State 3
+        Milestone submitted
+    end note
+
+    note right of AWAITING_REVIEW
+        State 4
+        Client reviewing
+    end note
+
+    note right of COMPLETED
+        State 5
+        All done, paid
+    end note
+
+    note right of CANCELLED
+        State 6
+        Refunded
+    end note

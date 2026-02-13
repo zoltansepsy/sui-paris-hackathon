@@ -1,0 +1,95 @@
+erDiagram
+    IdentityRegistry ||--o{ Profile : "maps zklogin_sub to"
+    Profile ||--|| ProfileCap : "controlled by"
+    Profile ||--o{ Job : "active_jobs"
+    Job ||--|| JobCap : "controlled by"
+    Job ||--|{ Milestone : "contains"
+    Job ||--o{ Rating : "receives"
+    Profile ||--o{ Rating : "receives"
+    Profile ||--o{ Badge : "earns"
+
+    IdentityRegistry {
+        UID id
+        Table_String_ID zklogin_to_profile
+    }
+
+    Profile {
+        UID id
+        address owner
+        String zklogin_sub
+        String email
+        u8 profile_type
+        String username
+        String real_name
+        String bio
+        vector_String tags
+        String avatar_url
+        u64 created_at
+        u64 updated_at
+        u64 completed_jobs
+        u64 total_jobs
+        u64 rating
+        u64 rating_count
+        u64 total_amount
+        bool verified
+        VecSet_ID active_jobs
+    }
+
+    ProfileCap {
+        UID id
+        ID profile_id
+    }
+
+    Job {
+        UID id
+        address client
+        Option_address freelancer
+        vector_u8 title
+        vector_u8 description_blob_id
+        u64 budget
+        Balance_SUI escrow
+        u8 state
+        Table_u64_Milestone milestones
+        u64 milestone_count
+        vector_address applicants
+        u64 created_at
+        u64 deadline
+        vector_vector_u8 deliverable_blob_ids
+    }
+
+    JobCap {
+        UID id
+        ID job_id
+    }
+
+    Milestone {
+        u64 id
+        vector_u8 description
+        u64 amount
+        bool completed
+        bool approved
+        Option_vector_u8 submission_blob_id
+        Option_u64 submitted_at
+        Option_u64 approved_at
+    }
+
+    Rating {
+        UID id
+        ID job_id
+        address rater
+        address ratee
+        u64 rating
+        String review
+        u64 created_at
+        bool disputed
+    }
+
+    Badge {
+        UID id
+        address owner
+        u8 tier
+        String name
+        String description
+        String icon_url
+        u64 awarded_at
+    }

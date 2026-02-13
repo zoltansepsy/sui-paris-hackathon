@@ -1,0 +1,1274 @@
+/// Comprehensive Test Suite for Profile NFT Module
+///
+/// Phases covered:
+/// - Phase 1: Critical Path (Happy Path)
+/// - Phase 2: Error Handling (Security & Validation)
+/// - Phase 3: Edge Cases (Overflows & Boundary Conditions)
+
+#[test_only]
+module zk_freelance::profile_nft_tests {
+    use sui::test_scenario::{Self as ts, Scenario};
+    use sui::clock::{Self, Clock};
+    use zk_freelance::profile_nft::{Self, Profile, ProfileCap};
+
+    // Test constants
+    const USER_A: address = @0xA;
+    const USER_B: address = @0xB;
+
+    const PROFILE_TYPE_FREELANCER: u8 = 0;
+    const PROFILE_TYPE_CLIENT: u8 = 1;
+
+    // Error codes
+    const EInvalidProfileType: u64 = 0;
+    const ENotProfileOwner: u64 = 1;
+    const EInvalidRating: u64 = 3;
+    const EZkLoginSubAlreadyRegistered: u64 = 5;
+
+    // ==================== HELPER FUNCTIONS ====================
+
+    /// Create a test clock
+    fun create_clock(scenario: &mut Scenario): Clock {
+        clock::create_for_testing(ts::ctx(scenario))
+    }
+
+    /// Generate zklogin_sub for a user
+    fun get_zklogin_sub(user: address): vector<u8> {
+        if (user == USER_A) {
+            b"google_sub_USER_A_12345"
+        } else if (user == USER_B) {
+            b"google_sub_USER_B_67890"
+        } else {
+            b"google_sub_OTHER_USER"
+        }
+    }
+
+    /// Generate email for a user
+    fun get_email(user: address): vector<u8> {
+        if (user == USER_A) {
+            b"user_a@test.com"
+        } else if (user == USER_B) {
+            b"user_b@test.com"
+        } else {
+            b"other@test.com"
+        }
+    }
+
+    /// Create basic profile data
+    fun get_basic_profile_data(): (vector<u8>, vector<u8>, vector<u8>, vector<vector<u8>>, vector<u8>) {
+        (
+            b"testuser",           // username
+            b"Test User",          // real_name
+            b"Test bio",           // bio
+            vector[b"Rust", b"Move"], // tags
+            b"avatar.png"          // avatar_url
+        )
+    }
+
+    /// Create profile with custom data using inline registry access
+    fun create_profile_helper(
+        scenario: &mut Scenario,
+        user: address,
+        profile_type: u8,
+        username: vector<u8>,
+    ) {
+        ts::next_tx(scenario, user);
+        {
+            let mut registry = ts::take_shared(scenario);
+            let clock = create_clock(scenario);
+            let (_, real_name, bio, tags, avatar_url) = get_basic_profile_data();
+            let zklogin_sub = get_zklogin_sub(user);
+            let email = get_email(user);
+
+            profile_nft::create_profile(
+                &mut registry,
+                profile_type,
+                zklogin_sub,
+                email,
+                username,
+                real_name,
+                bio,
+                tags,
+                avatar_url,
+                &clock,
+                ts::ctx(scenario)
+            );
+
+            clock::destroy_for_testing(clock);
+            ts::return_shared(registry);
+        };
+    }
+
+    // ==================== PHASE 1: CRITICAL PATH TESTS ====================
+
+    #[test]
+    /// Test 1: Create basic freelancer profile
+    fun test_create_freelancer_profile() {
+        let mut scenario = ts::begin(USER_A);
+
+        // Initialize IdentityRegistry
+        profile_nft::init_for_testing(ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut registry = ts::take_shared(&scenario);
+            let clock = create_clock(&mut scenario);
+            let (username, real_name, bio, tags, avatar_url) = get_basic_profile_data();
+            let zklogin_sub = get_zklogin_sub(USER_A);
+            let email = get_email(USER_A);
+
+            profile_nft::create_profile(
+                &mut registry,
+                PROFILE_TYPE_FREELANCER,
+                zklogin_sub,
+                email,
+                username,
+                real_name,
+                bio,
+                tags,
+                avatar_url,
+                &clock,
+                ts::ctx(&mut scenario)
+            );
+
+            clock::destroy_for_testing(clock);
+            ts::return_shared(registry);
+        };
+
+        // Verify profile and cap were created
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let profile = ts::take_from_sender<Profile>(&scenario);
+            let cap = ts::take_from_sender<ProfileCap>(&scenario);
+
+            // Verify profile fields
+            assert!(profile_nft::get_owner(&profile) == USER_A, 0);
+            assert!(profile_nft::get_profile_type(&profile) == PROFILE_TYPE_FREELANCER, 1);
+            assert!(profile_nft::get_completed_jobs(&profile) == 0, 2);
+            assert!(profile_nft::get_total_jobs(&profile) == 0, 3);
+            assert!(profile_nft::get_rating(&profile) == 0, 4);
+            assert!(profile_nft::get_rating_count(&profile) == 0, 5);
+            assert!(profile_nft::get_total_amount(&profile) == 0, 6);
+            assert!(!profile_nft::is_verified(&profile), 7);
+            assert!(profile_nft::get_active_jobs_count(&profile) == 0, 8);
+
+            ts::return_to_sender(&scenario, profile);
+            ts::return_to_sender(&scenario, cap);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 2: Create basic client profile
+    fun test_create_client_profile() {
+        let mut scenario = ts::begin(USER_B);
+
+        create_profile_helper(&mut scenario, USER_B, PROFILE_TYPE_CLIENT, b"clientuser");
+
+        ts::next_tx(&mut scenario, USER_B);
+        {
+            let profile = ts::take_from_sender<Profile>(&scenario);
+
+            assert!(profile_nft::get_profile_type(&profile) == PROFILE_TYPE_CLIENT, 0);
+            assert!(profile_nft::get_owner(&profile) == USER_B, 1);
+
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 3: Create profile with empty fields
+    fun test_create_profile_with_empty_fields() {
+        let mut scenario = ts::begin(USER_A);
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let clock = create_clock(&mut scenario);
+
+            profile_nft::create_profile(
+                PROFILE_TYPE_FREELANCER,
+                b"",           // empty username
+                b"",           // empty real_name
+                b"",           // empty bio
+                vector[],      // no tags
+                b"",           // empty avatar
+                &clock,
+                ts::ctx(&mut scenario)
+            );
+
+            clock::destroy_for_testing(clock);
+        };
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let profile = ts::take_from_sender<Profile>(&scenario);
+            assert!(profile_nft::get_active_jobs_count(&profile) == 0, 0);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 4: Create profile with multiple tags
+    fun test_create_profile_with_many_tags() {
+        let mut scenario = ts::begin(USER_A);
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let clock = create_clock(&mut scenario);
+            let tags = vector[
+                b"Rust", b"Move", b"JavaScript", b"Python",
+                b"Solidity", b"React", b"Node.js", b"Docker"
+            ];
+
+            profile_nft::create_profile(
+                PROFILE_TYPE_FREELANCER,
+                b"polyglot_dev",
+                b"Polyglot Developer",
+                b"Full-stack blockchain developer",
+                tags,
+                b"avatar.png",
+                &clock,
+                ts::ctx(&mut scenario)
+            );
+
+            clock::destroy_for_testing(clock);
+        };
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let profile = ts::take_from_sender<Profile>(&scenario);
+            assert!(profile_nft::get_owner(&profile) == USER_A, 0);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 11: Update single field (username)
+    fun test_update_single_field() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"oldusername");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let cap = ts::take_from_sender<ProfileCap>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            profile_nft::update_profile_info(
+                &mut profile,
+                &cap,
+                option::some(b"newusername"),
+                option::none(),
+                option::none(),
+                option::none(),
+                option::none(),
+                &clock,
+                ts::ctx(&mut scenario)
+            );
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+            ts::return_to_sender(&scenario, cap);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 12: Update all fields at once
+    fun test_update_all_fields() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"user1");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let cap = ts::take_from_sender<ProfileCap>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            profile_nft::update_profile_info(
+                &mut profile,
+                &cap,
+                option::some(b"updated_user"),
+                option::some(b"Updated Name"),
+                option::some(b"Updated bio with more details"),
+                option::some(vector[b"NewSkill1", b"NewSkill2"]),
+                option::some(b"new_avatar.png"),
+                &clock,
+                ts::ctx(&mut scenario)
+            );
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+            ts::return_to_sender(&scenario, cap);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 13: Update with all None options
+    fun test_update_with_all_none() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"user1");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let cap = ts::take_from_sender<ProfileCap>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            // Only updates timestamp, no field changes
+            profile_nft::update_profile_info(
+                &mut profile,
+                &cap,
+                option::none(),
+                option::none(),
+                option::none(),
+                option::none(),
+                option::none(),
+                &clock,
+                ts::ctx(&mut scenario)
+            );
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+            ts::return_to_sender(&scenario, cap);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 23: First rating
+    fun test_first_rating() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            profile_nft::add_rating(&mut profile, 450, &clock);
+
+            assert!(profile_nft::get_rating(&profile) == 450, 0);
+            assert!(profile_nft::get_rating_count(&profile) == 1, 1);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 24: Second rating (average calculation)
+    fun test_second_rating_average() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            // First rating: 500 (5.0 stars)
+            profile_nft::add_rating(&mut profile, 500, &clock);
+            assert!(profile_nft::get_rating(&profile) == 500, 0);
+
+            // Second rating: 400 (4.0 stars)
+            profile_nft::add_rating(&mut profile, 400, &clock);
+
+            // Expected average: (500 + 400) / 2 = 450
+            assert!(profile_nft::get_rating(&profile) == 450, 1);
+            assert!(profile_nft::get_rating_count(&profile) == 2, 2);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 25: Multiple ratings convergence
+    fun test_multiple_ratings() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            let ratings = vector[500, 450, 480, 470, 460, 490, 450, 440, 500, 470];
+            let mut i = 0;
+            let len = vector::length(&ratings);
+
+            while (i < len) {
+                let rating = *vector::borrow(&ratings, i);
+                profile_nft::add_rating(&mut profile, rating, &clock);
+                i = i + 1;
+            };
+
+            // Verify 10 ratings were added
+            assert!(profile_nft::get_rating_count(&profile) == 10, 0);
+
+            // Average: (500+450+480+470+460+490+450+440+500+470)/10 = 4710/10 = 471
+            assert!(profile_nft::get_rating(&profile) == 471, 1);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 26: Minimum valid rating (10)
+    fun test_minimum_valid_rating() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            profile_nft::add_rating(&mut profile, 10, &clock);
+
+            assert!(profile_nft::get_rating(&profile) == 10, 0);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 27: Maximum valid rating (500)
+    fun test_maximum_valid_rating() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            profile_nft::add_rating(&mut profile, 500, &clock);
+
+            assert!(profile_nft::get_rating(&profile) == 500, 0);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 35: First job completion
+    fun test_first_job_completion() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+            let job_id = object::id_from_address(@0x123);
+
+            profile_nft::record_job_completion(&mut profile, job_id, 1000, &clock);
+
+            assert!(profile_nft::get_completed_jobs(&profile) == 1, 0);
+            assert!(profile_nft::get_total_amount(&profile) == 1000, 1);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 36: Multiple job completions
+    fun test_multiple_job_completions() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            let amounts = vector[1000, 2000, 1500, 3000, 2500];
+            let mut i = 0;
+            let len = vector::length(&amounts);
+
+            while (i < len) {
+                let amount = *vector::borrow(&amounts, i);
+                // Create unique addresses for each job
+                let addr = if (i == 0) { @0x100 }
+                    else if (i == 1) { @0x101 }
+                    else if (i == 2) { @0x102 }
+                    else if (i == 3) { @0x103 }
+                    else { @0x104 };
+                let job_id = object::id_from_address(addr);
+                profile_nft::record_job_completion(&mut profile, job_id, amount, &clock);
+                i = i + 1;
+            };
+
+            assert!(profile_nft::get_completed_jobs(&profile) == 5, 0);
+            assert!(profile_nft::get_total_amount(&profile) == 10000, 1);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 37: Job completion with zero amount
+    fun test_job_completion_zero_amount() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+            let job_id = object::id_from_address(@0x999);
+
+            profile_nft::record_job_completion(&mut profile, job_id, 0, &clock);
+
+            assert!(profile_nft::get_completed_jobs(&profile) == 1, 0);
+            assert!(profile_nft::get_total_amount(&profile) == 0, 1);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 38: Job completion removes from active jobs
+    fun test_job_completion_removes_from_active() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+            let job_id = object::id_from_address(@0xABC);
+
+            // Add job to active jobs
+            profile_nft::add_active_job(&mut profile, job_id, &clock);
+            assert!(profile_nft::is_job_active(&profile, job_id), 0);
+            assert!(profile_nft::get_active_jobs_count(&profile) == 1, 1);
+
+            // Complete job
+            profile_nft::record_job_completion(&mut profile, job_id, 5000, &clock);
+
+            // Verify job removed from active
+            assert!(!profile_nft::is_job_active(&profile, job_id), 2);
+            assert!(profile_nft::get_active_jobs_count(&profile) == 0, 3);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 39: Complete job not in active jobs
+    fun test_complete_job_not_in_active() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+            let job_id = object::id_from_address(@0xDEF);
+
+            // Complete job that was never in active_jobs
+            profile_nft::record_job_completion(&mut profile, job_id, 3000, &clock);
+
+            assert!(profile_nft::get_completed_jobs(&profile) == 1, 0);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 43: Add first active job
+    fun test_add_first_active_job() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+            let job_id = object::id_from_address(@0x111);
+
+            profile_nft::add_active_job(&mut profile, job_id, &clock);
+
+            assert!(profile_nft::get_total_jobs(&profile) == 1, 0);
+            assert!(profile_nft::get_active_jobs_count(&profile) == 1, 1);
+            assert!(profile_nft::is_job_active(&profile, job_id), 2);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 44: Add multiple active jobs
+    fun test_add_multiple_active_jobs() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            let mut i = 0;
+            while (i < 10) {
+                let addr = if (i == 0) { @0x200 }
+                    else if (i == 1) { @0x201 }
+                    else if (i == 2) { @0x202 }
+                    else if (i == 3) { @0x203 }
+                    else if (i == 4) { @0x204 }
+                    else if (i == 5) { @0x205 }
+                    else if (i == 6) { @0x206 }
+                    else if (i == 7) { @0x207 }
+                    else if (i == 8) { @0x208 }
+                    else { @0x209 };
+                let job_id = object::id_from_address(addr);
+                profile_nft::add_active_job(&mut profile, job_id, &clock);
+                i = i + 1;
+            };
+
+            assert!(profile_nft::get_total_jobs(&profile) == 10, 0);
+            assert!(profile_nft::get_active_jobs_count(&profile) == 10, 1);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 47: Remove existing job
+    fun test_remove_existing_job() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+            let job_id = object::id_from_address(@0x333);
+
+            profile_nft::add_active_job(&mut profile, job_id, &clock);
+            assert!(profile_nft::is_job_active(&profile, job_id), 0);
+
+            profile_nft::remove_active_job(&mut profile, job_id, &clock);
+            assert!(!profile_nft::is_job_active(&profile, job_id), 1);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 48: Remove non-existent job
+    fun test_remove_nonexistent_job() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+            let job_id = object::id_from_address(@0x444);
+
+            // Try removing job that was never added (should succeed silently)
+            profile_nft::remove_active_job(&mut profile, job_id, &clock);
+
+            assert!(profile_nft::get_active_jobs_count(&profile) == 0, 0);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 49: Remove all jobs one by one
+    fun test_remove_all_jobs() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            let mut job_ids = vector::empty<object::ID>();
+            let mut i = 0;
+
+            // Add 5 jobs
+            while (i < 5) {
+                let addr = if (i == 0) { @0x500 }
+                    else if (i == 1) { @0x501 }
+                    else if (i == 2) { @0x502 }
+                    else if (i == 3) { @0x503 }
+                    else { @0x504 };
+                let job_id = object::id_from_address(addr);
+                vector::push_back(&mut job_ids, job_id);
+                profile_nft::add_active_job(&mut profile, job_id, &clock);
+                i = i + 1;
+            };
+
+            assert!(profile_nft::get_active_jobs_count(&profile) == 5, 0);
+
+            // Remove all 5 jobs
+            i = 0;
+            while (i < 5) {
+                let job_id = *vector::borrow(&job_ids, i);
+                profile_nft::remove_active_job(&mut profile, job_id, &clock);
+                i = i + 1;
+            };
+
+            assert!(profile_nft::get_active_jobs_count(&profile) == 0, 1);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 67: Full user journey - Freelancer
+    fun test_full_journey_freelancer() {
+        let mut scenario = ts::begin(USER_A);
+
+        // Create profile
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"senior_dev");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let cap = ts::take_from_sender<ProfileCap>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            // Add 3 active jobs
+            let job1 = object::id_from_address(@0x1001);
+            let job2 = object::id_from_address(@0x1002);
+            let job3 = object::id_from_address(@0x1003);
+
+            profile_nft::add_active_job(&mut profile, job1, &clock);
+            profile_nft::add_active_job(&mut profile, job2, &clock);
+            profile_nft::add_active_job(&mut profile, job3, &clock);
+
+            assert!(profile_nft::get_active_jobs_count(&profile) == 3, 0);
+
+            // Complete 2 jobs with payments
+            profile_nft::record_job_completion(&mut profile, job1, 5000, &clock);
+            profile_nft::record_job_completion(&mut profile, job2, 7500, &clock);
+
+            assert!(profile_nft::get_completed_jobs(&profile) == 2, 1);
+            assert!(profile_nft::get_total_amount(&profile) == 12500, 2);
+            assert!(profile_nft::get_active_jobs_count(&profile) == 1, 3);
+
+            // Receive 5 ratings
+            profile_nft::add_rating(&mut profile, 500, &clock);
+            profile_nft::add_rating(&mut profile, 450, &clock);
+            profile_nft::add_rating(&mut profile, 480, &clock);
+            profile_nft::add_rating(&mut profile, 470, &clock);
+            profile_nft::add_rating(&mut profile, 490, &clock);
+
+            assert!(profile_nft::get_rating_count(&profile) == 5, 4);
+            // Average: (500+450+480+470+490)/5 = 2390/5 = 478
+            assert!(profile_nft::get_rating(&profile) == 478, 5);
+
+            // Set verification
+            profile_nft::set_verification(&mut profile, true, &clock, ts::ctx(&mut scenario));
+            assert!(profile_nft::is_verified(&profile), 6);
+
+            // Update profile
+            profile_nft::update_profile_info(
+                &mut profile,
+                &cap,
+                option::some(b"verified_dev"),
+                option::none(),
+                option::some(b"Verified senior blockchain developer"),
+                option::none(),
+                option::none(),
+                &clock,
+                ts::ctx(&mut scenario)
+            );
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+            ts::return_to_sender(&scenario, cap);
+        };
+
+        ts::end(scenario);
+    }
+
+    // ==================== PHASE 2: ERROR HANDLING TESTS ====================
+
+    #[test]
+    #[expected_failure(abort_code = EInvalidProfileType)]
+    /// Test 6: Invalid profile type (too high)
+    fun test_invalid_profile_type_high() {
+        let mut scenario = ts::begin(USER_A);
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let clock = create_clock(&mut scenario);
+            let (username, real_name, bio, tags, avatar_url) = get_basic_profile_data();
+
+            profile_nft::create_profile(
+                2, // Invalid: only 0 and 1 are valid
+                username,
+                real_name,
+                bio,
+                tags,
+                avatar_url,
+                &clock,
+                ts::ctx(&mut scenario)
+            );
+
+            clock::destroy_for_testing(clock);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = EInvalidProfileType)]
+    /// Test 6b: Invalid profile type (255)
+    fun test_invalid_profile_type_max() {
+        let mut scenario = ts::begin(USER_A);
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let clock = create_clock(&mut scenario);
+            let (username, real_name, bio, tags, avatar_url) = get_basic_profile_data();
+
+            profile_nft::create_profile(
+                255,
+                username,
+                real_name,
+                bio,
+                tags,
+                avatar_url,
+                &clock,
+                ts::ctx(&mut scenario)
+            );
+
+            clock::destroy_for_testing(clock);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = ENotProfileOwner)]
+    /// Test 16: Update with wrong ProfileCap
+    fun test_update_with_wrong_cap() {
+        let mut scenario = ts::begin(USER_A);
+
+        // User A creates profile
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"user_a");
+
+        // User B creates profile
+        ts::next_tx(&mut scenario, USER_B);
+        {
+            let clock = create_clock(&mut scenario);
+            let (_username, real_name, bio, tags, avatar_url) = get_basic_profile_data();
+
+            profile_nft::create_profile(
+                PROFILE_TYPE_CLIENT,
+                b"user_b",
+                real_name,
+                bio,
+                tags,
+                avatar_url,
+                &clock,
+                ts::ctx(&mut scenario)
+            );
+
+            clock::destroy_for_testing(clock);
+        };
+
+        // User B tries to update User A's profile with User B's cap
+        ts::next_tx(&mut scenario, USER_B);
+        {
+            let mut profile_a = ts::take_from_address<Profile>(&scenario, USER_A);
+            let cap_b = ts::take_from_sender<ProfileCap>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            // This should abort with ENotProfileOwner
+            profile_nft::update_profile_info(
+                &mut profile_a,
+                &cap_b,
+                option::some(b"hacked"),
+                option::none(),
+                option::none(),
+                option::none(),
+                option::none(),
+                &clock,
+                ts::ctx(&mut scenario)
+            );
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_address(USER_A, profile_a);
+            ts::return_to_sender(&scenario, cap_b);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = EInvalidRating)]
+    /// Test 28: Rating below minimum (9)
+    fun test_rating_below_minimum() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            // Rating = 9 is invalid (minimum is 10)
+            profile_nft::add_rating(&mut profile, 9, &clock);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = EInvalidRating)]
+    /// Test 28b: Rating = 0
+    fun test_rating_zero() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            profile_nft::add_rating(&mut profile, 0, &clock);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = EInvalidRating)]
+    /// Test 29: Rating above maximum (501)
+    fun test_rating_above_maximum() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            // Rating = 501 is invalid (maximum is 500)
+            profile_nft::add_rating(&mut profile, 501, &clock);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = EInvalidRating)]
+    /// Test 29b: Rating = 1000
+    fun test_rating_very_high() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            profile_nft::add_rating(&mut profile, 1000, &clock);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure]
+    /// Test 45: Add duplicate job ID (VecSet will abort)
+    fun test_add_duplicate_job() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+            let job_id = object::id_from_address(@0x777);
+
+            // Add job first time (succeeds)
+            profile_nft::add_active_job(&mut profile, job_id, &clock);
+
+            // Try adding same job again (should abort)
+            profile_nft::add_active_job(&mut profile, job_id, &clock);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    // ==================== PHASE 3: EDGE CASE TESTS ====================
+
+    #[test]
+    /// Test 31: Integer division truncation in ratings
+    fun test_rating_truncation() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            // First rating: 500
+            profile_nft::add_rating(&mut profile, 500, &clock);
+
+            // Second rating: 333
+            profile_nft::add_rating(&mut profile, 333, &clock);
+
+            // Expected: (500 + 333) / 2 = 833 / 2 = 416 (truncated, not 416.5)
+            assert!(profile_nft::get_rating(&profile) == 416, 0);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 34: Rating average stability (no drift)
+    fun test_rating_no_drift() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            // Add initial rating
+            profile_nft::add_rating(&mut profile, 450, &clock);
+
+            // Add 99 more ratings of 450
+            let mut i = 0;
+            while (i < 99) {
+                profile_nft::add_rating(&mut profile, 450, &clock);
+                i = i + 1;
+            };
+
+            // Rating should still be 450 (no drift from truncation)
+            assert!(profile_nft::get_rating(&profile) == 450, 0);
+            assert!(profile_nft::get_rating_count(&profile) == 100, 1);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 42: Very large amount in job completion
+    fun test_very_large_amount() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+            let job_id = object::id_from_address(@0x999999);
+
+            // Use a very large amount (but not max to avoid overflow)
+            let large_amount = 1000000000000; // 1 trillion
+            profile_nft::record_job_completion(&mut profile, job_id, large_amount, &clock);
+
+            assert!(profile_nft::get_completed_jobs(&profile) == 1, 0);
+            assert!(profile_nft::get_total_amount(&profile) == large_amount, 1);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 50: Remove job that was never added (edge case)
+    fun test_remove_never_added() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+            let job_id = object::id_from_address(@0xFAFAFA);
+
+            // Try removing from empty active_jobs (should succeed silently)
+            profile_nft::remove_active_job(&mut profile, job_id, &clock);
+
+            assert!(profile_nft::get_active_jobs_count(&profile) == 0, 0);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test 80: VecSet behavior - remove and re-add same job
+    fun test_vecset_remove_and_readd() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+            let job_id = object::id_from_address(@0xCCCC);
+
+            // Add job
+            profile_nft::add_active_job(&mut profile, job_id, &clock);
+            assert!(profile_nft::is_job_active(&profile, job_id), 0);
+            assert!(profile_nft::get_total_jobs(&profile) == 1, 1);
+
+            // Remove job
+            profile_nft::remove_active_job(&mut profile, job_id, &clock);
+            assert!(!profile_nft::is_job_active(&profile, job_id), 2);
+
+            // Re-add same job (should succeed - not a duplicate anymore)
+            profile_nft::add_active_job(&mut profile, job_id, &clock);
+            assert!(profile_nft::is_job_active(&profile, job_id), 3);
+            assert!(profile_nft::get_total_jobs(&profile) == 2, 4); // total_jobs increments again
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    /// Test verification toggle
+    fun test_verification_toggle() {
+        let mut scenario = ts::begin(USER_A);
+
+        create_profile_helper(&mut scenario, USER_A, PROFILE_TYPE_FREELANCER, b"freelancer");
+
+        ts::next_tx(&mut scenario, USER_A);
+        {
+            let mut profile = ts::take_from_sender<Profile>(&scenario);
+            let clock = create_clock(&mut scenario);
+
+            // Initially not verified
+            assert!(!profile_nft::is_verified(&profile), 0);
+
+            // Set to verified
+            profile_nft::set_verification(&mut profile, true, &clock, ts::ctx(&mut scenario));
+            assert!(profile_nft::is_verified(&profile), 1);
+
+            // Set back to unverified
+            profile_nft::set_verification(&mut profile, false, &clock, ts::ctx(&mut scenario));
+            assert!(!profile_nft::is_verified(&profile), 2);
+
+            clock::destroy_for_testing(clock);
+            ts::return_to_sender(&scenario, profile);
+        };
+
+        ts::end(scenario);
+    }
+}

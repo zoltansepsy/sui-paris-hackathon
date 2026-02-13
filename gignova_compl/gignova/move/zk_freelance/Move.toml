@@ -1,0 +1,7 @@
+[package]
+name = "zk_freelance"
+version = "0.0.1"
+edition = "2024.beta"
+
+[addresses]
+zk_freelance = "0x0"

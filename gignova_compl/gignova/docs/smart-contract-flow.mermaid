@@ -1,0 +1,33 @@
+flowchart TB
+    subgraph profile_nft["PROFILE_NFT MODULE"]
+        IR[IdentityRegistry<br/>shared]
+        P[Profile<br/>owned]
+        PC[ProfileCap<br/>owned]
+
+        IR -->|"maps to"| P
+        PC -->|"controls"| P
+    end
+
+    subgraph job_escrow["JOB_ESCROW MODULE"]
+        J[Job<br/>shared]
+        JC[JobCap<br/>owned]
+        M[Milestone<br/>stored]
+
+        JC -->|"controls"| J
+        J -->|"contains"| M
+    end
+
+    subgraph reputation["REPUTATION MODULE"]
+        R[Rating<br/>shared]
+        B[Badge<br/>owned]
+    end
+
+    %% Cross-module interactions
+    J -->|"create_job()<br/>start_job()"| P
+    J -->|"approve_milestone()<br/>cancel_job()"| P
+    R -->|"submit_rating()"| P
+    J -->|"on completion"| R
+
+    style profile_nft fill:#e1f5fe
+    style job_escrow fill:#fff3e0
+    style reputation fill:#f3e5f5

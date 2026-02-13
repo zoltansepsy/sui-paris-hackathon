@@ -1,0 +1,41 @@
+{
+  "name": "sui-paris-hack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SUI Paris Hack 24h - dApp skeleton",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "start": "turbo run start",
+    "lint": "turbo run lint",
+    "type-check": "turbo run type-check",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "lint-staged": {
+    "apps/**/*.{ts,tsx}": [
+      "cd apps/dapp && eslint --fix --config eslint.config.mjs",
+      "prettier --write"
+    ],
+    "*.{ts,tsx}": [
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^15.2.11",
+    "prettier": "^3.7.4",
+    "turbo": "latest",
+    "typescript": "^5"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@hack/types",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared TypeScript types for SUI Paris Hack",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "scripts": {
+    "type-check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5"
+  }
+}

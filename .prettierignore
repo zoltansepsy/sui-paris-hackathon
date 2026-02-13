@@ -1,0 +1,11 @@
+# Generated and third-party
+node_modules
+.next
+coverage
+playwright-report
+test-results
+dist
+build
+
+# Documentation (may have different formatting)
+docs

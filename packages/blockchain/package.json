@@ -1,0 +1,20 @@
+{
+  "name": "@hack/blockchain",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SUI Paris Hack - blockchain contracts and SDK",
+  "main": "./sdk/index.ts",
+  "types": "./sdk/index.ts",
+  "scripts": {
+    "build:contracts": "cd contracts && sui move build",
+    "test:contracts": "cd contracts && sui move test",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mysten/dapp-kit": "^0.19.11",
+    "@mysten/sui": "^1.45.2"
+  },
+  "devDependencies": {
+    "typescript": "^5"
+  }
+}
